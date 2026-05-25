@@ -1,83 +1,103 @@
-# ai-node — LLM инференс на Android GPU без облаков
+# ai-node — On-device LLM inference on Android GPU
 
-Qwen2.5 1.5B работает на Adreno 660 через Vulkan. Всё локально — никаких API ключей, никакого интернета для инференса.
+Qwen2.5 1.5B running on Adreno 660 via Vulkan (Mesa Turnip). Fully local — no internet, no API keys, no cloud required.
 
 ```
 Telegram → bridge.go → llama.cpp → Vulkan (Turnip) → Adreno 660
 ```
 
-## Производительность
+## Performance
 
-| Модель | Вес | Prompt | Генерация |
-|--------|-----|--------|-----------|
+| Model | Size | Prompt | Generation |
+|-------|------|--------|-----------|
 | Qwen2.5 1.5B Q8_0 | 1.8 GB | 24 t/s | 8 t/s |
 | Qwen2.5 0.5B Q8_0 | 0.7 GB | 54 t/s | 8 t/s |
 
-Телефон — Realme GT (Snapdragon 888+, 2021). GPU — Adreno 660.
+Device: Realme GT (Snapdragon 888+, 2021), GPU: Adreno 660.
 
-## Как работает
+## How it works
 
-1. Приходит сообщение из Telegram
-2. Bridge собирает данные системы (температура, батарея, память, диск)
-3. Шлёт промпт в llama.cpp через HTTP
-4. llama.cpp делает инференс на GPU через Vulkan (Mesa Turnip)
-5. Ответ возвращается в Telegram
+1. Message arrives from Telegram
+2. Bridge collects system data (temperature, battery, memory, disk)
+3. Prompt sent to llama.cpp via HTTP
+4. llama.cpp runs inference on GPU via Vulkan (Mesa Turnip)
+5. Response returned to Telegram
 
-## Проблема, которую пришлось решать
+## Known issue: GPU state corruption
 
-Turnip (Mesa) — открытый Vulkan драйвер для Adreno. Он быстрый и работает на всём, но есть нюанс: после ~50 запросов состояние GPU портится, и модель начинает выдавать `@@@@@` вместо ответа.
+Mesa Turnip (open-source Vulkan driver for Adreno) has a bug — after ~50 inference requests, GPU state corrupts and output becomes `@@@@@`.
 
-**Что сделал:**
-- Детект `@@@@@` в ответе → молча рестарт сервера + повтор запроса без сообщения пользователю
-- Кроме того, рестарт каждые 10 запросов превентивно (чтобы减少 вероятность сбоя)
-- Флаги `--cache-ram 0` и `--no-kv-offload` — отключают кеши, которые триггерили баг
+**Fixed by:**
+- Each response is checked for `@@@@@` pattern
+- If garbage detected — server silently restarts, request retried
+- Proactive restart every 10 requests reduces failure probability
+- `--cache-ram 0` and `--no-kv-offload` disable caching mechanisms that trigger the bug
 
-Всё прозрачно — пользователь видит только корректный ответ.
+Everything is transparent — user only sees correct responses.
 
 ## System data injection
 
-Перед каждым запросом bridge выполняет 4 shell-команды:
+Before each inference, bridge runs 4 shell commands:
 
 ```
-cat /sys/class/thermal/thermal_zone*/temp  → температура CPU/GPU
-dumpsys battery                              → заряд и температура батареи
-free -m                                      → память
-df -h /data                                  → диск
+cat /sys/class/thermal/thermal_zone*/temp  → CPU/GPU temperature
+dumpsys battery                              → charge level and temperature
+free -m                                      → memory
+df -h /data                                  → disk usage
 ```
 
-Данные подставляются в system prompt. Модель может ответить "процессор 45°C, батарея 37°C" — не выдумывая цифры.
+Results are injected into the system prompt. The model can answer "CPU is 45°C, battery is 37°C" with real numbers.
 
-## Команды Telegram
+## Telegram commands
 
-- `/ai вопрос` — задать вопрос ассистенту
-- `/fix проблема` — помочь с отладкой  
-- `/shell команда` — выполнить shell-команду на телефоне
-- `/status` — состояние системы
-- `/log` — логи bridge
-- `/restart_deauthd` — перезапустить сетевой демон
+- `/ai question` — ask the assistant
+- `/fix issue` — debugging assistance
+- `/shell command` — execute shell command on device
+- `/status` — system health
+- `/log` — bridge logs
+- `/restart_deauthd` — restart network daemon
 
-## Стек
+## Stack
 
-| Компонент | Технология |
+| Component | Technology |
 |-----------|-----------|
-| LLM | llama.cpp (NDK сборка, Vulkan backend) |
+| LLM | llama.cpp (NDK build, Vulkan backend) |
 | GPU driver | Mesa Turnip 26.2 (Vulkan 1.4) |
-| Модель | Qwen2.5 1.5B / 0.5B Q8_0 |
+| Model | Qwen2.5 1.5B / 0.5B Q8_0 |
 | Bridge | Go 1.22 |
 | OS | Android 13, Magisk root |
-| Автозапуск | Magisk service.d |
+| Autorun | Magisk service.d |
 
-## Структура файлов
+## File layout
 
 ```
 /data/local/tmp/
 ├── llama-vk/
-│   ├── llama-server        # Основной сервер
-│   ├── llama-cli          # CLI для тестов
+│   ├── llama-server        # Main server
+│   ├── llama-cli          # CLI for testing
 │   └── *.so               # Shared libraries (ggml-vulkan, etc)
-├── qwen_15.gguf            # 1.5B модель
-├── qwen05.gguf             # 0.5B модель (опционально)
-├── bridge                  # Go-бот
-├── deauthd                 # Сетевой демон (опционально)
-└── llm_servers.sh          # Скрипт автозапуска
+├── qwen_15.gguf            # 1.5B model (~1.8 GB)
+├── qwen05.gguf             # 0.5B model (optional)
+├── bridge                  # Go Telegram bot
+├── deauthd                 # Network daemon (optional)
+└── llm_servers.sh          # Boot script
+```
+
+## Building
+
+```bash
+# Requires: Android NDK
+cmake -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30 \
+  -DGGML_VULKAN=ON -DGGML_OPENMP=OFF \
+  /path/to/llama.cpp
+cmake --build . --target llama-server --target llama-cli -j8
+```
+
+## Local build
+
+```bash
+cp config.go.example config.go
+# edit config.go with your tokens
+go build -o bridge bridge.go config.go
 ```
