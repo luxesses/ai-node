@@ -1,0 +1,5 @@
+config.go
+*.log
+*.gguf
+*.so
+.DS_Store

@@ -1,0 +1,5 @@
+package main
+
+const TGToken = "YOUR_BOT_TOKEN"
+const TGChatID = "YOUR_CHAT_ID"
+const DeauthdTG = "YOUR_DEAUTHD_TOKEN:CHAT_ID"
