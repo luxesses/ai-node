@@ -20,11 +20,6 @@ const RestartEvery = 10
 var logMu sync.Mutex
 var reqCount int
 
-type LMResponse struct {
-	Content string `json:"content"`
-	Done    bool   `json:"done"`
-}
-
 func logf(format string, args ...interface{}) {
 	t := time.Now().Format("2006/01/02 15:04:05")
 	msg := fmt.Sprintf("[%s] %s\n", t, fmt.Sprintf(format, args...))
